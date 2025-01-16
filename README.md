@@ -37,9 +37,9 @@ This project is written in Python and is open for contributions.
    git clone https://github.com/Auth0r-C0dez/Caption_generator.git
    cd Caption_generator
    ```
-2. Install the dependencies:
+2. Install the dependencies through requirements.txt:
    ```bash
-   pip install gradio
+   pip install -r requirements.txt
    ```
 
 ## Usage
