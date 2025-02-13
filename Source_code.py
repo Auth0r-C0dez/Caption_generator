@@ -2,7 +2,6 @@ import gradio as gr
 from transformers import BlipProcessor, BlipForConditionalGeneration, DetrImageProcessor, DetrForObjectDetection,TrOCRProcessor, VisionEncoderDecoderModel
 from PIL import Image
 import random
-import emoji
 from textblob import TextBlob
 from deep_translator import GoogleTranslator
 import datetime
@@ -14,13 +13,14 @@ from dotenv import load_dotenv
 import webbrowser
 import torch
 from PIL import ImageDraw
-import pytesseract
-import cv2
 import easyocr
 import numpy as np
 
 # Load environment variables
 load_dotenv()
+
+# Load models efficiently with GPU support
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Try to load the pre-trained model and processor with error handling
 try:
@@ -42,19 +42,16 @@ def detect_objects(image):
 
     # Apply threshold manually
     valid_indices = results["scores"] > 0.7
-    results = {k: v[valid_indices] for k, v in results.items()}
+    detected_objects = [od_model.config.id2label[label] for label in results["labels"][valid_indices].tolist()]
+    boxes = results["boxes"][valid_indices].tolist()
 
     draw = ImageDraw.Draw(image)
-    detected_objects = []
-    
-    for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
-        box = [round(i, 2) for i in box.tolist()]
-        label_name = od_model.config.id2label[label.item()]
-        detected_objects.append(label_name)
+    for label, box in zip(detected_objects, boxes):
+        box = [round(i, 2) for i in box]
         draw.rectangle(box, outline="red", width=3)
-        draw.text((box[0], box[1]), f"{label_name} ({score:.2f})", fill="red")
-    
-    return  detected_objects
+        draw.text((box[0], box[1]), f"{label}", fill="red")
+
+    return detected_objects
 
 
 
@@ -275,29 +272,18 @@ def add_aesthetic_flair(description):
 
 
 def generate_caption(image):
-
     try:
-        # Enhanced caption generation with multiple attempts
-        inputs = processor(images=image, return_tensors="pt")
-        captions = []
-        
-        for _ in range(3):
-            outputs = model.generate(
-                **inputs,
-                max_length=50,
-                num_beams=5,
-                do_sample=True,  # Enable sampling
-                temperature=random.uniform(0.6, 0.8),
-                top_p=0.9
-            )
-            caption = processor.decode(outputs[0], skip_special_tokens=True)
-            captions.append(caption)
-        
-        # Select the most detailed caption
-        base_caption = max(captions, key=len)
-        full_caption = add_aesthetic_flair(base_caption)
-        
-        return full_caption
+        inputs = processor(images=image, return_tensors="pt").to(device)
+        outputs = model.generate(
+            **inputs,
+            max_length=50,
+            num_beams=5,
+            do_sample=True,
+            temperature=random.uniform(0.6, 0.8),
+            top_p=0.9
+        )
+        caption = processor.decode(outputs[0], skip_special_tokens=True)
+        return add_aesthetic_flair(caption)
     except Exception as e:
         return f"Caption generation failed: {str(e)}"
 
@@ -312,29 +298,23 @@ def answer_question(image, question):
 
 
 def handle_request(image, question, mode):
-    """
-
-
-    Enhanced image captioning with robust error handling
-
-    """
-    Extract_data=extract_text_with_preprocessing(image)
     if image is None:
-        return "Please provide a valid image",""
-        
+        return "Please provide a valid image", ""
+    
+    extracted_text = extract_text_with_preprocessing(image)
+
     try:
         if mode == "Object Detection":
-            detected_objects = detect_objects(image.copy())  # Work on a copy to avoid modifying original
-            return  f"Detected Objects: {', '.join(detected_objects)}",Extract_data
+            detected_objects = detect_objects(image.copy())
+            return f"Detected Objects: {', '.join(detected_objects)}", extracted_text
+        
         if question:
-            question=question.strip()  
-            answer = answer_question(image, question)
-            return f"Question: {question}\nAnswer: {answer}",Extract_data
-        else: 
-            caption = generate_caption(image)
-            return caption,Extract_data
+            question = question.strip()
+            return f"Question: {question}\nAnswer: {answer_question(image, question)}", extracted_text
+        
+        return generate_caption(image), extracted_text
     except Exception as e:
-        return f"An error occurred: {str(e)}"
+        return f"An error occurred: {str(e)}", ""
 
 # Gradio interface with an option for Object Detection
 iface = gr.Interface(
@@ -346,7 +326,7 @@ iface = gr.Interface(
     ],
     outputs=[
         gr.Textbox(label="✨ Output"),
-        gr.Textbox(label="✨ Text from Image")
+        gr.Textbox(label="📜 Text from Image")
     ],
     title="🎨 AI-Powered Creative Caption & Object Detection",
     description="Upload an image to generate captions, answer questions, or detect objects.",
